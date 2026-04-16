@@ -17,6 +17,7 @@ const BOTS = [
   { username: 'Semi2412',    auth: 'microsoft' },
   { username: 'Babetr0n4497', auth: 'microsoft' },
   { username: 'Yogan1260',   auth: 'microsoft' },
+  { username: 'henry979',    auth: 'microsoft' },
 ];
 
 const BOT_SPAWN_DELAY = 60000; // 60 seconds between bots — enough time to auth each Microsoft account
@@ -138,9 +139,25 @@ async function createBot(account) {
     if (r.status === 'noPath') console.warn(`[${bot.username}] No path to AFK spot — check coordinates.`);
   });
 
+  // Catch low-level packet parse errors (e.g. PartialReadError on particle packets in 1.21.5)
+  // These don't fire bot 'error'/'end' on their own, so we force a reconnect.
+  bot._client.on('error', (err) => {
+    console.error(`[${bot.username}] Client error: ${err.message} — forcing reconnect...`);
+    try { bot.quit('client error'); } catch (_) {}
+  });
+
+  // Watchdog: if the bot hasn't reached AFK state within 3 minutes, force a reconnect.
+  const watchdog = setTimeout(() => {
+    if (state !== 'afk') {
+      console.warn(`[${bot.username}] Watchdog: stuck in state "${state}" after 3 min — forcing reconnect...`);
+      try { bot.quit('watchdog timeout'); } catch (_) {}
+    }
+  }, 3 * 60 * 1000);
+
   bot.on('kicked', (reason) => console.error(`[${bot.username}] Kicked: ${reason}`));
   bot.on('error',  (err)    => console.error(`[${bot.username}] Error: ${err.message}`));
   bot.on('end',    (reason) => {
+    clearTimeout(watchdog);
     activeBots.delete(account.username);
     if (pausedBots.has(account.username)) {
       console.log(`[${bot.username}] Disconnected (paused) — will not reconnect until resumed.`);
