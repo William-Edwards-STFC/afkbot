@@ -12,6 +12,9 @@ const AFK_X = 165;
 const AFK_Y = 82;
 const AFK_Z = -1;
 
+// How long to wait without seeing the AFK GUI before reconnecting (ms)
+const AFK_GUI_TIMEOUT = 3 * 60 * 1000; // 3 minutes
+
 const BOTS = [
   { username: 'Alunewie',    auth: 'microsoft' },
   { username: 'Semi2412',    auth: 'microsoft' },
@@ -66,6 +69,15 @@ async function createBot(account) {
 
   // states: hub → selecting → server → navigating → afk
   let state = 'hub';
+  let afkGuiWatchdog = null;
+
+  function resetAfkGuiWatchdog() {
+    clearTimeout(afkGuiWatchdog);
+    afkGuiWatchdog = setTimeout(() => {
+      console.warn(`[${bot.username}] AFK GUI not detected in ${AFK_GUI_TIMEOUT / 60000} min — reconnecting...`);
+      try { bot.quit('afk gui timeout'); } catch (_) {}
+    }, AFK_GUI_TIMEOUT);
+  }
 
   // ── Hub: right-click Game Selector item ─────────────────────────────────
   bot.on('spawn', async () => {
@@ -92,6 +104,7 @@ async function createBot(account) {
 
     if (state === 'afk') {
       console.log(`[${bot.username}] AFK reward GUI detected (windowId=${packet.windowId})`);
+      resetAfkGuiWatchdog();
     }
   });
 
@@ -131,6 +144,7 @@ async function createBot(account) {
       state = 'afk';
       bot.pathfinder.stop();
       console.log(`[${bot.username}] Reached AFK spot. Standing by.`);
+      resetAfkGuiWatchdog();
     });
   }
 
@@ -154,10 +168,19 @@ async function createBot(account) {
     }
   }, 3 * 60 * 1000);
 
-  bot.on('kicked', (reason) => console.error(`[${bot.username}] Kicked: ${reason}`));
+  bot.on('kicked', (reason) => {
+    try {
+      const parsed = typeof reason === 'string' ? JSON.parse(reason) : reason;
+      const text = parsed?.extra?.map(e => e.text ?? e).join('') ?? parsed?.text ?? JSON.stringify(parsed);
+      console.error(`[${bot.username}] Kicked: ${text}`);
+    } catch {
+      console.error(`[${bot.username}] Kicked: ${reason}`);
+    }
+  });
   bot.on('error',  (err)    => console.error(`[${bot.username}] Error: ${err.message}`));
   bot.on('end',    (reason) => {
     clearTimeout(watchdog);
+    clearTimeout(afkGuiWatchdog);
     activeBots.delete(account.username);
     if (pausedBots.has(account.username)) {
       console.log(`[${bot.username}] Disconnected (paused) — will not reconnect until resumed.`);
