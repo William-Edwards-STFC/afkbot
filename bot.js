@@ -206,7 +206,7 @@ async function createBot(account) {
   for (let i = 0; i < BOTS.length; i++) {
     console.log(`Spawning bot ${i + 1}/${BOTS.length}: ${BOTS[i].username}`);
     createBot(BOTS[i]);
-    if (i < BOTS.length - 1) await sleep(BOT_SPAWN_DELAY);
+    if (i < BOTS.length - 1 && !pausedBots.has(BOTS[i].username)) await sleep(BOT_SPAWN_DELAY);
   }
 })();
 
