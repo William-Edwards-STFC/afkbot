@@ -251,7 +251,9 @@ function applyPausedList(newList) {
       pausedBots.add(acc.username);
       const bot = activeBots.get(acc.username);
       if (bot) {
-        bot.quit('paused by operator');
+        try { bot.quit('paused by operator'); } catch (_) {
+          try { bot._client.end('paused by operator'); } catch (_) {}
+        }
         console.log(`[${acc.username}] Disconnected and paused.`);
       } else {
         console.log(`[${acc.username}] Marked as paused (will not reconnect).`);
