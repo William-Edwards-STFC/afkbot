@@ -202,14 +202,6 @@ async function createBot(account) {
   });
 }
 
-(async () => {
-  for (let i = 0; i < BOTS.length; i++) {
-    console.log(`Spawning bot ${i + 1}/${BOTS.length}: ${BOTS[i].username}`);
-    createBot(BOTS[i]);
-    if (i < BOTS.length - 1 && !pausedBots.has(BOTS[i].username)) await sleep(BOT_SPAWN_DELAY);
-  }
-})();
-
 // ─── FILE-BASED CONTROL ─────────────────────────────────────────────────────
 // Edit paused.json to pause/resume bots at runtime:
 //   Add a username    → bot disconnects and stops reconnecting
@@ -267,8 +259,16 @@ function applyPausedList(newList) {
   }
 }
 
-// Load initial state
+// Load initial paused list BEFORE spawning so the loop skips them immediately
 applyPausedList(readPausedFile());
+
+(async () => {
+  for (let i = 0; i < BOTS.length; i++) {
+    console.log(`Spawning bot ${i + 1}/${BOTS.length}: ${BOTS[i].username}`);
+    createBot(BOTS[i]);
+    if (i < BOTS.length - 1 && !pausedBots.has(BOTS[i].username)) await sleep(BOT_SPAWN_DELAY);
+  }
+})();
 
 // Watch for changes
 fs.watch(path.dirname(PAUSED_FILE), (eventType, filename) => {
