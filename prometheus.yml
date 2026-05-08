@@ -1,7 +1,0 @@
-global:
-  scrape_interval: 15s
-
-scrape_configs:
-  - job_name: afkbot
-    static_configs:
-      - targets: ['afkbot:9090']
