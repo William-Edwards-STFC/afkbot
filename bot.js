@@ -13,6 +13,7 @@ const registry = new Registry();
 collectDefaultMetrics({ register: registry });
 
 const activeBotCount = new Gauge({ name: 'afkbot_active_bots_total',    help: 'Connected bots',          registers: [registry] });
+const botOnline      = new Gauge({ name: 'afkbot_bot_online',            help: 'Per-bot online status',   labelNames: ['username'], registers: [registry] });
 const reconnectCount = new Counter({ name: 'afkbot_reconnects_total',   help: 'Reconnect attempts',      labelNames: ['username'], registers: [registry] });
 const kickCount      = new Counter({ name: 'afkbot_kicks_total',         help: 'Kicks received',          labelNames: ['username'], registers: [registry] });
 const rewardCount    = new Counter({ name: 'afkbot_daily_rewards_total', help: 'Daily rewards claimed',   labelNames: ['username'], registers: [registry] });
@@ -50,6 +51,7 @@ const BOTS = [
 
 // Initialise all counters to zero so every bot appears in charts even before first event
 for (const acc of BOTS) {
+  botOnline.set({ username: acc.username }, 0);
   reconnectCount.inc({ username: acc.username }, 0);
   kickCount.inc({ username: acc.username }, 0);
   rewardCount.inc({ username: acc.username }, 0);
@@ -192,6 +194,7 @@ async function createBot(account) {
     bot.once('goal_reached', () => {
       setState('afk');
       bot.pathfinder.stop();
+      botOnline.set({ username: account.username }, 1);
       blog.info({ event: 'afk_reached', x: AFK_X, y: AFK_Y, z: AFK_Z }, 'Reached AFK spot, standing by');
       resetAfkGuiWatchdog();
 
@@ -245,6 +248,7 @@ async function createBot(account) {
     clearTimeout(afkGuiWatchdog);
     clearInterval(coinTimer);
     clearInterval(fruitTimer);
+    botOnline.set({ username: account.username }, 0);
     activeBots.delete(account.username);
     if (pausedBots.has(account.username)) {
       blog.info({ event: 'bot_disconnected', reason, paused: true }, 'Disconnected (paused) — will not reconnect');
