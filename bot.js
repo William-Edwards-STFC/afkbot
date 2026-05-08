@@ -23,6 +23,35 @@ const downtimeSeconds = new Counter({ name: 'afkbot_downtime_seconds_total', hel
 
 const disconnectTimes = new Map();
 
+// ─── CONFIG ────────────────────────────────────────────────────────────────
+const HUB_HOST = 'play.lostpiece.net';
+const HUB_PORT = 25565;
+
+const AFK_X = 165;
+const AFK_Y = 82;
+const AFK_Z = -1;
+
+const AFK_GUI_TIMEOUT = 3 * 60 * 1000;
+
+const BOTS = [
+  { username: 'Alunewie',     nickname: 'Alunewie',    auth: 'microsoft' },
+  { username: 'Semi2412',     nickname: 'semi2412',    auth: 'microsoft' },
+  { username: 'Babetr0n4497', nickname: 'Babetron',    auth: 'microsoft' },
+  { username: 'Yogan1260',    nickname: 'yogan1260',   auth: 'microsoft' },
+  { username: 'henry979',     nickname: 'henry979',    auth: 'microsoft' },
+  { username: 'alt66',        nickname: 'v1perrex',    auth: 'microsoft' },
+  { username: 'alt77',        nickname: 'Kulsts',      auth: 'microsoft' },
+  { username: 'alt8',         nickname: 'oolonglebg',  auth: 'microsoft' },
+  { username: 'alt9',         nickname: '8uuav',       auth: 'microsoft' },
+  { username: 'alt10',        nickname: 'sznurek',     auth: 'microsoft' },
+  { username: 'alt11',        nickname: 'fnaflol12',   auth: 'microsoft' },
+  { username: 'alt12',        nickname: 'Aquilaurea',  auth: 'microsoft' },
+  { username: 'alt13',        nickname: 'kfln',        auth: 'microsoft' },
+  { username: 'alt14',        nickname: 'Mookra',      auth: 'microsoft' },
+  { username: 'alt15',        nickname: 'Matuzali',    auth: 'microsoft' },
+  { username: 'alt1',         nickname: 'painkakes',   auth: 'microsoft' },
+];
+
 // ─── PERSISTENT STATS ──────────────────────────────────────────────────────
 const STATS_FILE = path.join(__dirname, 'stats.json');
 
@@ -55,36 +84,7 @@ setInterval(saveStats, 5 * 60 * 1000);
 process.on('SIGTERM', saveStats);
 process.on('SIGINT', saveStats);
 
-// ─── CONFIG ────────────────────────────────────────────────────────────────
-const HUB_HOST = 'play.lostpiece.net';
-const HUB_PORT = 25565;
-
-const AFK_X = 165;
-const AFK_Y = 82;
-const AFK_Z = -1;
-
-const AFK_GUI_TIMEOUT = 3 * 60 * 1000;
-
-const BOTS = [
-  { username: 'Alunewie',     nickname: 'Alunewie',    auth: 'microsoft' },
-  { username: 'Semi2412',     nickname: 'semi2412',    auth: 'microsoft' },
-  { username: 'Babetr0n4497', nickname: 'Babetron',    auth: 'microsoft' },
-  { username: 'Yogan1260',    nickname: 'yogan1260',   auth: 'microsoft' },
-  { username: 'henry979',     nickname: 'henry979',    auth: 'microsoft' },
-  { username: 'alt66',        nickname: 'v1perrex',    auth: 'microsoft' },
-  { username: 'alt77',        nickname: 'Kulsts',      auth: 'microsoft' },
-  { username: 'alt8',         nickname: 'oolonglebg',  auth: 'microsoft' },
-  { username: 'alt9',         nickname: '8uuav',       auth: 'microsoft' },
-  { username: 'alt10',        nickname: 'sznurek',     auth: 'microsoft' },
-  { username: 'alt11',        nickname: 'fnaflol12',   auth: 'microsoft' },
-  { username: 'alt12',        nickname: 'Aquilaurea',  auth: 'microsoft' },
-  { username: 'alt13',        nickname: 'kfln',        auth: 'microsoft' },
-  { username: 'alt14',        nickname: 'Mookra',      auth: 'microsoft' },
-  { username: 'alt15',        nickname: 'Matuzali',    auth: 'microsoft' },
-  { username: 'alt1',         nickname: 'painkakes',   auth: 'microsoft' },
-];
-
-// Initialise all counters to zero so every bot appears in charts even before first event
+// Initialise all counters from persisted values so charts survive restarts
 for (const acc of BOTS) {
   const s = persistedStats[acc.username];
   botOnline.set({ username: acc.username }, 0);
