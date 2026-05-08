@@ -14,6 +14,26 @@ const reconnectCount = new Counter({ name: 'afkbot_reconnects_total',  help: 'Re
 const kickCount      = new Counter({ name: 'afkbot_kicks_total',        help: 'Kicks received',         labelNames: ['username'], registers: [registry] });
 const rewardCount    = new Counter({ name: 'afkbot_daily_rewards_total', help: 'Daily rewards claimed', labelNames: ['username'], registers: [registry] });
 
+// Initialise all counters to zero so every bot appears in charts even before first event
+const BOTS = [
+  { username: 'Alunewie',     auth: 'microsoft' },
+  { username: 'Semi2412',     auth: 'microsoft' },
+  { username: 'Babetr0n4497', auth: 'microsoft' },
+  { username: 'Yogan1260',    auth: 'microsoft' },
+  { username: 'henry979',     auth: 'microsoft' },
+  { username: 'alt66',        auth: 'microsoft' },
+  { username: 'alt77',        auth: 'microsoft' },
+  { username: 'alt8',         auth: 'microsoft' },
+  { username: 'alt9',         auth: 'microsoft' },
+  { username: 'alt10',        auth: 'microsoft' },
+  { username: 'alt11',        auth: 'microsoft' },
+  { username: 'alt12',        auth: 'microsoft' },
+  { username: 'alt13',        auth: 'microsoft' },
+  { username: 'alt14',        auth: 'microsoft' },
+  { username: 'alt15',        auth: 'microsoft' },
+  { username: 'alt1',         auth: 'microsoft' },
+];
+
 http.createServer(async (req, res) => {
   if (req.url === '/metrics') {
     activeBotCount.set(activeBots.size);
@@ -33,24 +53,11 @@ const AFK_Z = -1;
 // How long to wait without seeing the AFK GUI before reconnecting (ms)
 const AFK_GUI_TIMEOUT = 3 * 60 * 1000; // 3 minutes
 
-const BOTS = [
-  { username: 'Alunewie',    auth: 'microsoft' },
-  { username: 'Semi2412',    auth: 'microsoft' },
-  { username: 'Babetr0n4497', auth: 'microsoft' },
-  { username: 'Yogan1260',   auth: 'microsoft' },
-  { username: 'henry979',    auth: 'microsoft' },
-  { username: 'alt66',    auth: 'microsoft' },
-  { username: 'alt77',    auth: 'microsoft' },
-  { username: 'alt8',    auth: 'microsoft' },
-  { username: 'alt9',    auth: 'microsoft' },
-  { username: 'alt10',    auth: 'microsoft' },
-  { username: 'alt11',    auth: 'microsoft' },
-  { username: 'alt12',    auth: 'microsoft' },
-  { username: 'alt13',    auth: 'microsoft' },
-  { username: 'alt14',    auth: 'microsoft' },
-  { username: 'alt15',    auth: 'microsoft' },
-  { username: 'alt1',    auth: 'microsoft' },
-];
+for (const acc of BOTS) {
+  reconnectCount.inc({ username: acc.username }, 0);
+  kickCount.inc({ username: acc.username }, 0);
+  rewardCount.inc({ username: acc.username }, 0);
+}
 
 const BOT_SPAWN_DELAY = 60000; // 60 seconds between bots — enough time to auth each Microsoft account
 
