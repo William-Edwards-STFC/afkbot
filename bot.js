@@ -12,13 +12,48 @@ const log = pino({ level: 'info' });
 const registry = new Registry();
 collectDefaultMetrics({ register: registry });
 
-const activeBotCount = new Gauge({ name: 'afkbot_active_bots_total',    help: 'Connected bots',          registers: [registry] });
-const botOnline      = new Gauge({ name: 'afkbot_bot_online',            help: 'Per-bot online status',   labelNames: ['username'], registers: [registry] });
-const reconnectCount = new Counter({ name: 'afkbot_reconnects_total',   help: 'Reconnect attempts',      labelNames: ['username'], registers: [registry] });
-const kickCount      = new Counter({ name: 'afkbot_kicks_total',         help: 'Kicks received',          labelNames: ['username'], registers: [registry] });
-const rewardCount    = new Counter({ name: 'afkbot_daily_rewards_total', help: 'Daily rewards claimed',   labelNames: ['username'], registers: [registry] });
-const coinsEarned    = new Counter({ name: 'afkbot_coins_earned_total',  help: 'Estimated coins earned',  labelNames: ['username'], registers: [registry] });
-const fruitsEarned   = new Counter({ name: 'afkbot_fruits_earned_total', help: 'Estimated devil fruits',  labelNames: ['username'], registers: [registry] });
+const activeBotCount  = new Gauge({ name: 'afkbot_active_bots_total',     help: 'Connected bots',           registers: [registry] });
+const botOnline       = new Gauge({ name: 'afkbot_bot_online',             help: 'Per-bot online status',    labelNames: ['username'], registers: [registry] });
+const reconnectCount  = new Counter({ name: 'afkbot_reconnects_total',    help: 'Reconnect attempts',       labelNames: ['username'], registers: [registry] });
+const kickCount       = new Counter({ name: 'afkbot_kicks_total',          help: 'Kicks received',           labelNames: ['username'], registers: [registry] });
+const rewardCount     = new Counter({ name: 'afkbot_daily_rewards_total',  help: 'Daily rewards claimed',    labelNames: ['username'], registers: [registry] });
+const coinsEarned     = new Counter({ name: 'afkbot_coins_earned_total',   help: 'Estimated coins earned',   labelNames: ['username'], registers: [registry] });
+const fruitsEarned    = new Counter({ name: 'afkbot_fruits_earned_total',  help: 'Estimated devil fruits',   labelNames: ['username'], registers: [registry] });
+const downtimeSeconds = new Counter({ name: 'afkbot_downtime_seconds_total', help: 'Total seconds offline', labelNames: ['username'], registers: [registry] });
+
+const disconnectTimes = new Map();
+
+// ─── PERSISTENT STATS ──────────────────────────────────────────────────────
+const STATS_FILE = path.join(__dirname, 'stats.json');
+
+const persistedStats = {};
+for (const acc of BOTS) {
+  persistedStats[acc.username] = { coins: 0, fruits: 0, downtime: 0, rewards: 0, reconnects: 0, kicks: 0 };
+}
+
+try {
+  if (fs.existsSync(STATS_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'));
+    for (const username of Object.keys(saved)) {
+      if (persistedStats[username]) Object.assign(persistedStats[username], saved[username]);
+    }
+    log.info({ event: 'stats_loaded' }, 'Loaded persisted stats from disk');
+  }
+} catch (e) {
+  log.error({ event: 'stats_load_error', err: e.message }, 'Failed to load stats.json — starting fresh');
+}
+
+function saveStats() {
+  try {
+    fs.writeFileSync(STATS_FILE, JSON.stringify(persistedStats, null, 2));
+  } catch (e) {
+    log.error({ event: 'stats_save_error', err: e.message }, 'Failed to save stats.json');
+  }
+}
+
+setInterval(saveStats, 5 * 60 * 1000);
+process.on('SIGTERM', saveStats);
+process.on('SIGINT', saveStats);
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const HUB_HOST = 'play.lostpiece.net';
@@ -51,12 +86,14 @@ const BOTS = [
 
 // Initialise all counters to zero so every bot appears in charts even before first event
 for (const acc of BOTS) {
+  const s = persistedStats[acc.username];
   botOnline.set({ username: acc.username }, 0);
-  reconnectCount.inc({ username: acc.username }, 0);
-  kickCount.inc({ username: acc.username }, 0);
-  rewardCount.inc({ username: acc.username }, 0);
-  coinsEarned.inc({ username: acc.username }, 0);
-  fruitsEarned.inc({ username: acc.username }, 0);
+  reconnectCount.inc({ username: acc.username }, s.reconnects);
+  kickCount.inc({ username: acc.username }, s.kicks);
+  rewardCount.inc({ username: acc.username }, s.rewards);
+  coinsEarned.inc({ username: acc.username }, s.coins);
+  fruitsEarned.inc({ username: acc.username }, s.fruits);
+  downtimeSeconds.inc({ username: acc.username }, s.downtime);
 }
 
 const BOT_SPAWN_DELAY = 60000;
@@ -156,6 +193,17 @@ async function createBot(account) {
     if (state === 'afk') {
       blog.info({ event: 'afk_gui_detected', windowId: packet.windowId }, 'AFK reward GUI detected');
       resetAfkGuiWatchdog();
+      rewardCount.inc({ username: account.username });
+      persistedStats[account.username].rewards += 1;
+      botOnline.set({ username: account.username }, 1);
+      const disconnectedAt = disconnectTimes.get(account.username);
+      if (disconnectedAt) {
+        const secs = Math.round((Date.now() - disconnectedAt) / 1000);
+        downtimeSeconds.inc({ username: account.username }, secs);
+        persistedStats[account.username].downtime += secs;
+        disconnectTimes.delete(account.username);
+        blog.info({ event: 'downtime_recorded', seconds: secs }, `Downtime: ${secs}s`);
+      }
     }
   });
 
@@ -194,16 +242,17 @@ async function createBot(account) {
     bot.once('goal_reached', () => {
       setState('afk');
       bot.pathfinder.stop();
-      botOnline.set({ username: account.username }, 1);
       blog.info({ event: 'afk_reached', x: AFK_X, y: AFK_Y, z: AFK_Z }, 'Reached AFK spot, standing by');
       resetAfkGuiWatchdog();
 
       coinTimer = setInterval(() => {
         coinsEarned.inc({ username: account.username }, 100);
+        persistedStats[account.username].coins += 100;
       }, 5 * 60 * 1000);
 
       fruitTimer = setInterval(() => {
         fruitsEarned.inc({ username: account.username }, 1);
+        persistedStats[account.username].fruits += 1;
       }, 6 * 60 * 60 * 1000);
     });
   }
@@ -230,6 +279,7 @@ async function createBot(account) {
 
   bot.on('kicked', (reason) => {
     kickCount.inc({ username: bot.username });
+    persistedStats[account.username].kicks += 1;
     try {
       const parsed = typeof reason === 'string' ? JSON.parse(reason) : reason;
       const text = parsed?.extra?.map(e => e.text ?? e).join('') ?? parsed?.text ?? JSON.stringify(parsed);
@@ -249,12 +299,14 @@ async function createBot(account) {
     clearInterval(coinTimer);
     clearInterval(fruitTimer);
     botOnline.set({ username: account.username }, 0);
+    disconnectTimes.set(account.username, Date.now());
     activeBots.delete(account.username);
     if (pausedBots.has(account.username)) {
       blog.info({ event: 'bot_disconnected', reason, paused: true }, 'Disconnected (paused) — will not reconnect');
     } else {
       blog.warn({ event: 'bot_disconnected', reason, paused: false, reconnect_in_ms: 30000 }, `Disconnected (${reason}) — reconnecting in 30s`);
       reconnectCount.inc({ username: account.username });
+      persistedStats[account.username].reconnects += 1;
       setTimeout(() => createBot(account), 30000);
     }
   });
