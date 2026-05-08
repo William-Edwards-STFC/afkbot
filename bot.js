@@ -16,6 +16,8 @@ const activeBotCount = new Gauge({ name: 'afkbot_active_bots_total',    help: 'C
 const reconnectCount = new Counter({ name: 'afkbot_reconnects_total',   help: 'Reconnect attempts',      labelNames: ['username'], registers: [registry] });
 const kickCount      = new Counter({ name: 'afkbot_kicks_total',         help: 'Kicks received',          labelNames: ['username'], registers: [registry] });
 const rewardCount    = new Counter({ name: 'afkbot_daily_rewards_total', help: 'Daily rewards claimed',   labelNames: ['username'], registers: [registry] });
+const coinsEarned    = new Counter({ name: 'afkbot_coins_earned_total',  help: 'Estimated coins earned',  labelNames: ['username'], registers: [registry] });
+const fruitsEarned   = new Counter({ name: 'afkbot_fruits_earned_total', help: 'Estimated devil fruits',  labelNames: ['username'], registers: [registry] });
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const HUB_HOST = 'play.lostpiece.net';
@@ -28,22 +30,22 @@ const AFK_Z = -1;
 const AFK_GUI_TIMEOUT = 3 * 60 * 1000;
 
 const BOTS = [
-  { username: 'Alunewie',     auth: 'microsoft' },
-  { username: 'Semi2412',     auth: 'microsoft' },
-  { username: 'Babetr0n4497', auth: 'microsoft' },
-  { username: 'Yogan1260',    auth: 'microsoft' },
-  { username: 'henry979',     auth: 'microsoft' },
-  { username: 'alt66',        auth: 'microsoft' },
-  { username: 'alt77',        auth: 'microsoft' },
-  { username: 'alt8',         auth: 'microsoft' },
-  { username: 'alt9',         auth: 'microsoft' },
-  { username: 'alt10',        auth: 'microsoft' },
-  { username: 'alt11',        auth: 'microsoft' },
-  { username: 'alt12',        auth: 'microsoft' },
-  { username: 'alt13',        auth: 'microsoft' },
-  { username: 'alt14',        auth: 'microsoft' },
-  { username: 'alt15',        auth: 'microsoft' },
-  { username: 'alt1',         auth: 'microsoft' },
+  { username: 'Alunewie',     nickname: 'Alunewie',    auth: 'microsoft' },
+  { username: 'Semi2412',     nickname: 'semi2412',    auth: 'microsoft' },
+  { username: 'Babetr0n4497', nickname: 'Babetron',    auth: 'microsoft' },
+  { username: 'Yogan1260',    nickname: 'yogan1260',   auth: 'microsoft' },
+  { username: 'henry979',     nickname: 'henry979',    auth: 'microsoft' },
+  { username: 'alt66',        nickname: 'v1perrex',    auth: 'microsoft' },
+  { username: 'alt77',        nickname: 'Kulsts',      auth: 'microsoft' },
+  { username: 'alt8',         nickname: 'oolonglebg',  auth: 'microsoft' },
+  { username: 'alt9',         nickname: '8uuav',       auth: 'microsoft' },
+  { username: 'alt10',        nickname: 'sznurek',     auth: 'microsoft' },
+  { username: 'alt11',        nickname: 'fnaflol12',   auth: 'microsoft' },
+  { username: 'alt12',        nickname: 'Aquilaurea',  auth: 'microsoft' },
+  { username: 'alt13',        nickname: 'kfln',        auth: 'microsoft' },
+  { username: 'alt14',        nickname: 'Mookra',      auth: 'microsoft' },
+  { username: 'alt15',        nickname: 'Matuzali',    auth: 'microsoft' },
+  { username: 'alt1',         nickname: 'painkakes',   auth: 'microsoft' },
 ];
 
 // Initialise all counters to zero so every bot appears in charts even before first event
@@ -51,6 +53,8 @@ for (const acc of BOTS) {
   reconnectCount.inc({ username: acc.username }, 0);
   kickCount.inc({ username: acc.username }, 0);
   rewardCount.inc({ username: acc.username }, 0);
+  coinsEarned.inc({ username: acc.username }, 0);
+  fruitsEarned.inc({ username: acc.username }, 0);
 }
 
 const BOT_SPAWN_DELAY = 60000;
@@ -92,7 +96,7 @@ async function createBot(account) {
     return;
   }
 
-  const blog = log.child({ username: account.username });
+  const blog = log.child({ username: account.username, nickname: account.nickname });
 
   const bot = mineflayer.createBot({
     host: HUB_HOST,
@@ -108,6 +112,8 @@ async function createBot(account) {
   // states: hub → selecting → server → navigating → afk
   let state = 'hub';
   let afkGuiWatchdog = null;
+  let coinTimer = null;
+  let fruitTimer = null;
 
   function setState(newState) {
     blog.info({ event: 'state_change', from: state, to: newState }, `State: ${state} → ${newState}`);
@@ -188,6 +194,14 @@ async function createBot(account) {
       bot.pathfinder.stop();
       blog.info({ event: 'afk_reached', x: AFK_X, y: AFK_Y, z: AFK_Z }, 'Reached AFK spot, standing by');
       resetAfkGuiWatchdog();
+
+      coinTimer = setInterval(() => {
+        coinsEarned.inc({ username: account.username }, 100);
+      }, 5 * 60 * 1000);
+
+      fruitTimer = setInterval(() => {
+        fruitsEarned.inc({ username: account.username }, 1);
+      }, 6 * 60 * 60 * 1000);
     });
   }
 
@@ -229,6 +243,8 @@ async function createBot(account) {
   bot.on('end', (reason) => {
     clearTimeout(watchdog);
     clearTimeout(afkGuiWatchdog);
+    clearInterval(coinTimer);
+    clearInterval(fruitTimer);
     activeBots.delete(account.username);
     if (pausedBots.has(account.username)) {
       blog.info({ event: 'bot_disconnected', reason, paused: true }, 'Disconnected (paused) — will not reconnect');
