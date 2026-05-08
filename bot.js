@@ -3,6 +3,24 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const mcDataLoader = require('minecraft-data');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+const { Registry, Gauge, Counter, collectDefaultMetrics } = require('prom-client');
+
+const registry = new Registry();
+collectDefaultMetrics({ register: registry });
+
+const activeBotCount = new Gauge({ name: 'afkbot_active_bots_total',   help: 'Connected bots',         registers: [registry] });
+const reconnectCount = new Counter({ name: 'afkbot_reconnects_total',  help: 'Reconnect attempts',     labelNames: ['username'], registers: [registry] });
+const kickCount      = new Counter({ name: 'afkbot_kicks_total',        help: 'Kicks received',         labelNames: ['username'], registers: [registry] });
+const rewardCount    = new Counter({ name: 'afkbot_daily_rewards_total', help: 'Daily rewards claimed', labelNames: ['username'], registers: [registry] });
+
+http.createServer(async (req, res) => {
+  if (req.url === '/metrics') {
+    activeBotCount.set(activeBots.size);
+    res.setHeader('Content-Type', registry.contentType);
+    res.end(await registry.metrics());
+  } else { res.writeHead(404); res.end(); }
+}).listen(9090, () => console.log('Metrics listening on :9090'));
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const HUB_HOST = 'play.lostpiece.net';
@@ -180,6 +198,7 @@ async function createBot(account) {
   }, 3 * 60 * 1000);
 
   bot.on('kicked', (reason) => {
+    kickCount.inc({ username: bot.username });
     try {
       const parsed = typeof reason === 'string' ? JSON.parse(reason) : reason;
       const text = parsed?.extra?.map(e => e.text ?? e).join('') ?? parsed?.text ?? JSON.stringify(parsed);
@@ -197,6 +216,7 @@ async function createBot(account) {
       console.log(`[${bot.username}] Disconnected (paused) — will not reconnect until resumed.`);
     } else {
       console.log(`[${bot.username}] Disconnected (${reason}) — reconnecting in 30s...`);
+      reconnectCount.inc({ username: account.username });
       setTimeout(() => createBot(account), 30000);
     }
   });
