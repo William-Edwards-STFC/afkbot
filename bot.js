@@ -4,17 +4,29 @@ const mcDataLoader = require('minecraft-data');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const pino = require('pino');
 const { Registry, Gauge, Counter, collectDefaultMetrics } = require('prom-client');
+
+const log = pino({ level: 'info' });
 
 const registry = new Registry();
 collectDefaultMetrics({ register: registry });
 
-const activeBotCount = new Gauge({ name: 'afkbot_active_bots_total',   help: 'Connected bots',         registers: [registry] });
-const reconnectCount = new Counter({ name: 'afkbot_reconnects_total',  help: 'Reconnect attempts',     labelNames: ['username'], registers: [registry] });
-const kickCount      = new Counter({ name: 'afkbot_kicks_total',        help: 'Kicks received',         labelNames: ['username'], registers: [registry] });
-const rewardCount    = new Counter({ name: 'afkbot_daily_rewards_total', help: 'Daily rewards claimed', labelNames: ['username'], registers: [registry] });
+const activeBotCount = new Gauge({ name: 'afkbot_active_bots_total',    help: 'Connected bots',          registers: [registry] });
+const reconnectCount = new Counter({ name: 'afkbot_reconnects_total',   help: 'Reconnect attempts',      labelNames: ['username'], registers: [registry] });
+const kickCount      = new Counter({ name: 'afkbot_kicks_total',         help: 'Kicks received',          labelNames: ['username'], registers: [registry] });
+const rewardCount    = new Counter({ name: 'afkbot_daily_rewards_total', help: 'Daily rewards claimed',   labelNames: ['username'], registers: [registry] });
 
-// Initialise all counters to zero so every bot appears in charts even before first event
+// ─── CONFIG ────────────────────────────────────────────────────────────────
+const HUB_HOST = 'play.lostpiece.net';
+const HUB_PORT = 25565;
+
+const AFK_X = 165;
+const AFK_Y = 82;
+const AFK_Z = -1;
+
+const AFK_GUI_TIMEOUT = 3 * 60 * 1000;
+
 const BOTS = [
   { username: 'Alunewie',     auth: 'microsoft' },
   { username: 'Semi2412',     auth: 'microsoft' },
@@ -34,46 +46,34 @@ const BOTS = [
   { username: 'alt1',         auth: 'microsoft' },
 ];
 
-http.createServer(async (req, res) => {
-  if (req.url === '/metrics') {
-    activeBotCount.set(activeBots.size);
-    res.setHeader('Content-Type', registry.contentType);
-    res.end(await registry.metrics());
-  } else { res.writeHead(404); res.end(); }
-}).listen(9090, () => console.log('Metrics listening on :9090'));
-
-// ─── CONFIG ────────────────────────────────────────────────────────────────
-const HUB_HOST = 'play.lostpiece.net';
-const HUB_PORT = 25565;
-
-const AFK_X = 165;
-const AFK_Y = 82;
-const AFK_Z = -1;
-
-// How long to wait without seeing the AFK GUI before reconnecting (ms)
-const AFK_GUI_TIMEOUT = 3 * 60 * 1000; // 3 minutes
-
+// Initialise all counters to zero so every bot appears in charts even before first event
 for (const acc of BOTS) {
   reconnectCount.inc({ username: acc.username }, 0);
   kickCount.inc({ username: acc.username }, 0);
   rewardCount.inc({ username: acc.username }, 0);
 }
 
-const BOT_SPAWN_DELAY = 60000; // 60 seconds between bots — enough time to auth each Microsoft account
+const BOT_SPAWN_DELAY = 60000;
 
 // ─── RUNTIME CONTROL ───────────────────────────────────────────────────────
-const pausedBots = new Set();       // usernames that should NOT auto-reconnect
-const activeBots = new Map();       // username → bot instance
+const pausedBots = new Set();
+const activeBots = new Map();
 
-// Hub GUI: row 3, col 5 → slot 22
 const SERVER_SELECT_SLOT = 22;
 // ───────────────────────────────────────────────────────────────────────────
+
+http.createServer(async (req, res) => {
+  if (req.url === '/metrics') {
+    activeBotCount.set(activeBots.size);
+    res.setHeader('Content-Type', registry.contentType);
+    res.end(await registry.metrics());
+  } else { res.writeHead(404); res.end(); }
+}).listen(9090, () => log.info({ event: 'metrics_server_started', port: 9090 }, 'Metrics listening on :9090'));
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Write a raw window_click packet (1.21.5 HashedSlot format)
 function rawClick(client, windowId, slot) {
   client.write('window_click', {
     windowId,
@@ -88,9 +88,11 @@ function rawClick(client, windowId, slot) {
 
 async function createBot(account) {
   if (pausedBots.has(account.username)) {
-    console.log(`[${account.username}] Is paused — skipping reconnect.`);
+    log.info({ event: 'bot_skipped', username: account.username }, 'Bot is paused — skipping reconnect');
     return;
   }
+
+  const blog = log.child({ username: account.username });
 
   const bot = mineflayer.createBot({
     host: HUB_HOST,
@@ -107,10 +109,15 @@ async function createBot(account) {
   let state = 'hub';
   let afkGuiWatchdog = null;
 
+  function setState(newState) {
+    blog.info({ event: 'state_change', from: state, to: newState }, `State: ${state} → ${newState}`);
+    state = newState;
+  }
+
   function resetAfkGuiWatchdog() {
     clearTimeout(afkGuiWatchdog);
     afkGuiWatchdog = setTimeout(() => {
-      console.warn(`[${bot.username}] AFK GUI not detected in ${AFK_GUI_TIMEOUT / 60000} min — reconnecting...`);
+      blog.warn({ event: 'afk_gui_timeout', state, timeout_ms: AFK_GUI_TIMEOUT }, 'AFK GUI not detected — reconnecting');
       try { bot.quit('afk gui timeout'); } catch (_) {}
     }, AFK_GUI_TIMEOUT);
   }
@@ -118,28 +125,28 @@ async function createBot(account) {
   // ── Hub: right-click Game Selector item ─────────────────────────────────
   bot.on('spawn', async () => {
     if (state !== 'hub') return;
-    console.log(`[${bot.username}] Spawned on hub, settling...`);
+    blog.info({ event: 'hub_spawned', state }, 'Spawned on hub, settling');
     await sleep(2000);
     bot.setQuickBarSlot(0);
     await sleep(200);
     bot.activateItem();
-    console.log(`[${bot.username}] Right-clicked Game Selector, waiting for GUI...`);
-    state = 'selecting';
+    blog.info({ event: 'game_selector_clicked', state }, 'Right-clicked Game Selector, waiting for GUI');
+    setState('selecting');
   });
 
   // ── Hub GUI: click server selector slot ─────────────────────────────────
   bot._client.on('open_window', async (packet) => {
     if (state === 'selecting') {
-      console.log(`[${bot.username}] Server selector GUI opened (windowId=${packet.windowId})`);
+      blog.info({ event: 'server_gui_opened', windowId: packet.windowId, state }, 'Server selector GUI opened');
       await sleep(3000);
-      state = 'server';
+      setState('server');
       rawClick(bot._client, packet.windowId, SERVER_SELECT_SLOT);
-      console.log(`[${bot.username}] Clicked slot ${SERVER_SELECT_SLOT}, awaiting transfer...`);
+      blog.info({ event: 'server_slot_clicked', slot: SERVER_SELECT_SLOT }, 'Clicked server slot, awaiting transfer');
       return;
     }
 
     if (state === 'afk') {
-      console.log(`[${bot.username}] AFK reward GUI detected (windowId=${packet.windowId})`);
+      blog.info({ event: 'afk_gui_detected', windowId: packet.windowId }, 'AFK reward GUI detected');
       resetAfkGuiWatchdog();
     }
   });
@@ -147,11 +154,11 @@ async function createBot(account) {
   // ── Server transfer ──────────────────────────────────────────────────────
   bot._client.on('login', async () => {
     if (state !== 'server') return;
-    state = 'navigating';
-    console.log(`[${bot.username}] Transferred to target server, waiting for world load...`);
+    setState('navigating');
+    blog.info({ event: 'server_transfer', method: 'login' }, 'Transferred to target server, waiting for world load');
     await sleep(3000);
     bot.chat('/hub');
-    console.log(`[${bot.username}] Sent /hub, waiting to land...`);
+    blog.info({ event: 'hub_command_sent' }, 'Sent /hub, waiting to land');
     await sleep(3000);
     navigateToAFK();
   });
@@ -159,8 +166,8 @@ async function createBot(account) {
   // Fallback spawn-based transfer detection
   bot.on('spawn', async () => {
     if (state !== 'server') return;
-    state = 'navigating';
-    console.log(`[${bot.username}] Transferred to target server (spawn), waiting for world load...`);
+    setState('navigating');
+    blog.info({ event: 'server_transfer', method: 'spawn' }, 'Transferred to target server via spawn, waiting for world load');
     await sleep(3000);
     bot.chat('/hub');
     await sleep(3000);
@@ -174,32 +181,32 @@ async function createBot(account) {
     movements.allowSprinting = true;
     bot.pathfinder.setMovements(movements);
     bot.pathfinder.setGoal(new goals.GoalBlock(AFK_X, AFK_Y, AFK_Z));
-    console.log(`[${bot.username}] Pathfinding to AFK spot (${AFK_X}, ${AFK_Y}, ${AFK_Z})...`);
+    blog.info({ event: 'pathfinding_started', target: { x: AFK_X, y: AFK_Y, z: AFK_Z } }, 'Pathfinding to AFK spot');
 
     bot.once('goal_reached', () => {
-      state = 'afk';
+      setState('afk');
       bot.pathfinder.stop();
-      console.log(`[${bot.username}] Reached AFK spot. Standing by.`);
+      blog.info({ event: 'afk_reached', x: AFK_X, y: AFK_Y, z: AFK_Z }, 'Reached AFK spot, standing by');
       resetAfkGuiWatchdog();
     });
   }
 
   // ── Error handling ───────────────────────────────────────────────────────
   bot.on('path_update', (r) => {
-    if (r.status === 'noPath') console.warn(`[${bot.username}] No path to AFK spot — check coordinates.`);
+    if (r.status === 'noPath') {
+      blog.warn({ event: 'no_path', target: { x: AFK_X, y: AFK_Y, z: AFK_Z } }, 'No path to AFK spot — check coordinates');
+    }
   });
 
-  // Catch low-level packet parse errors (e.g. PartialReadError on particle packets in 1.21.5)
-  // These don't fire bot 'error'/'end' on their own, so we force a reconnect.
   bot._client.on('error', (err) => {
-    console.error(`[${bot.username}] Client error: ${err.message} — forcing reconnect...`);
+    blog.error({ event: 'client_error', err: err.message, state }, 'Client error — forcing reconnect');
     try { bot.quit('client error'); } catch (_) {}
   });
 
   // Watchdog: if the bot hasn't reached AFK state within 3 minutes, force a reconnect.
   const watchdog = setTimeout(() => {
     if (state !== 'afk') {
-      console.warn(`[${bot.username}] Watchdog: stuck in state "${state}" after 3 min — forcing reconnect...`);
+      blog.warn({ event: 'watchdog_triggered', state }, `Watchdog: stuck in state "${state}" after 3 min — forcing reconnect`);
       try { bot.quit('watchdog timeout'); } catch (_) {}
     }
   }, 3 * 60 * 1000);
@@ -209,20 +216,24 @@ async function createBot(account) {
     try {
       const parsed = typeof reason === 'string' ? JSON.parse(reason) : reason;
       const text = parsed?.extra?.map(e => e.text ?? e).join('') ?? parsed?.text ?? JSON.stringify(parsed);
-      console.error(`[${bot.username}] Kicked: ${text}`);
+      blog.error({ event: 'kicked', reason: text, state }, `Kicked: ${text}`);
     } catch {
-      console.error(`[${bot.username}] Kicked: ${reason}`);
+      blog.error({ event: 'kicked', reason: String(reason), state }, `Kicked: ${reason}`);
     }
   });
-  bot.on('error',  (err)    => console.error(`[${bot.username}] Error: ${err.message}`));
-  bot.on('end',    (reason) => {
+
+  bot.on('error', (err) => {
+    blog.error({ event: 'bot_error', err: err.message, state }, `Bot error: ${err.message}`);
+  });
+
+  bot.on('end', (reason) => {
     clearTimeout(watchdog);
     clearTimeout(afkGuiWatchdog);
     activeBots.delete(account.username);
     if (pausedBots.has(account.username)) {
-      console.log(`[${bot.username}] Disconnected (paused) — will not reconnect until resumed.`);
+      blog.info({ event: 'bot_disconnected', reason, paused: true }, 'Disconnected (paused) — will not reconnect');
     } else {
-      console.log(`[${bot.username}] Disconnected (${reason}) — reconnecting in 30s...`);
+      blog.warn({ event: 'bot_disconnected', reason, paused: false, reconnect_in_ms: 30000 }, `Disconnected (${reason}) — reconnecting in 30s`);
       reconnectCount.inc({ username: account.username });
       setTimeout(() => createBot(account), 30000);
     }
@@ -230,13 +241,6 @@ async function createBot(account) {
 }
 
 // ─── FILE-BASED CONTROL ─────────────────────────────────────────────────────
-// Edit paused.json to pause/resume bots at runtime:
-//   Add a username    → bot disconnects and stops reconnecting
-//   Remove a username → bot reconnects automatically
-//
-// Example paused.json:
-//   ["Alunewie", "Semi2412"]
-//
 const PAUSED_FILE = path.join(__dirname, 'paused.json');
 
 function resolveAlias(entry) {
@@ -252,7 +256,7 @@ function readPausedFile() {
     if (!raw) return [];
     return JSON.parse(raw).map(resolveAlias);
   } catch (e) {
-    console.error(`[control] Failed to parse paused.json: ${e.message}`);
+    log.error({ event: 'control_file_error', err: e.message }, `Failed to parse paused.json: ${e.message}`);
     return [];
   }
 }
@@ -266,38 +270,34 @@ function applyPausedList(newList) {
     const isPaused  = newSet.has(key);
 
     if (!wasPaused && isPaused) {
-      // Newly paused — disconnect
       pausedBots.add(acc.username);
       const bot = activeBots.get(acc.username);
       if (bot) {
         try { bot.quit('paused by operator'); } catch (_) {
           try { bot._client.end('paused by operator'); } catch (_) {}
         }
-        console.log(`[${acc.username}] Disconnected and paused.`);
+        log.info({ event: 'bot_paused', username: acc.username }, 'Bot disconnected and paused');
       } else {
-        console.log(`[${acc.username}] Marked as paused (will not reconnect).`);
+        log.info({ event: 'bot_paused', username: acc.username }, 'Bot marked as paused (not currently connected)');
       }
     } else if (wasPaused && !isPaused) {
-      // Newly resumed — reconnect
       pausedBots.delete(acc.username);
-      console.log(`[${acc.username}] Resuming...`);
+      log.info({ event: 'bot_resumed', username: acc.username }, 'Bot resumed — reconnecting');
       createBot(acc);
     }
   }
 }
 
-// Load initial paused list BEFORE spawning so the loop skips them immediately
 applyPausedList(readPausedFile());
 
 (async () => {
   for (let i = 0; i < BOTS.length; i++) {
-    console.log(`Spawning bot ${i + 1}/${BOTS.length}: ${BOTS[i].username}`);
+    log.info({ event: 'bot_spawning', username: BOTS[i].username, index: i + 1, total: BOTS.length }, `Spawning bot ${i + 1}/${BOTS.length}: ${BOTS[i].username}`);
     createBot(BOTS[i]);
     if (i < BOTS.length - 1 && !pausedBots.has(BOTS[i].username)) await sleep(BOT_SPAWN_DELAY);
   }
 })();
 
-// Watch for changes
 fs.watch(path.dirname(PAUSED_FILE), (eventType, filename) => {
   if (filename !== 'paused.json') return;
   applyPausedList(readPausedFile());
