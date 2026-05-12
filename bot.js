@@ -16,10 +16,9 @@ const activeBotCount  = new Gauge({ name: 'afkbot_active_bots_total',     help: 
 const botOnline       = new Gauge({ name: 'afkbot_bot_online',             help: 'Per-bot online status',    labelNames: ['username'], registers: [registry] });
 const reconnectCount  = new Counter({ name: 'afkbot_reconnects_total',    help: 'Reconnect attempts',       labelNames: ['username'], registers: [registry] });
 const kickCount       = new Counter({ name: 'afkbot_kicks_total',          help: 'Kicks received',           labelNames: ['username'], registers: [registry] });
-const rewardCount     = new Counter({ name: 'afkbot_daily_rewards_total',  help: 'Daily rewards claimed',    labelNames: ['username'], registers: [registry] });
-const coinsEarned     = new Counter({ name: 'afkbot_coins_earned_total',   help: 'Estimated coins earned',   labelNames: ['username'], registers: [registry] });
-const fruitsEarned    = new Counter({ name: 'afkbot_fruits_earned_total',  help: 'Estimated devil fruits',   labelNames: ['username'], registers: [registry] });
-const downtimeSeconds = new Counter({ name: 'afkbot_downtime_seconds_total', help: 'Total seconds offline', labelNames: ['username'], registers: [registry] });
+const rewardCount     = new Counter({ name: 'afkbot_daily_rewards_total',    help: 'Daily rewards claimed',   labelNames: ['username'], registers: [registry] });
+const uptimeSeconds   = new Counter({ name: 'afkbot_uptime_seconds_total',   help: 'Total seconds in AFK',    labelNames: ['username'], registers: [registry] });
+const downtimeSeconds = new Counter({ name: 'afkbot_downtime_seconds_total', help: 'Total seconds offline',   labelNames: ['username'], registers: [registry] });
 
 const disconnectTimes = new Map();
 
@@ -57,7 +56,7 @@ const STATS_FILE = path.join(__dirname, 'stats.json');
 
 const persistedStats = {};
 for (const acc of BOTS) {
-  persistedStats[acc.username] = { coins: 0, fruits: 0, downtime: 0, rewards: 0, reconnects: 0, kicks: 0 };
+  persistedStats[acc.username] = { uptime: 0, downtime: 0, rewards: 0, reconnects: 0, kicks: 0 };
 }
 
 try {
@@ -91,8 +90,7 @@ for (const acc of BOTS) {
   reconnectCount.inc({ username: acc.username }, s.reconnects);
   kickCount.inc({ username: acc.username }, s.kicks);
   rewardCount.inc({ username: acc.username }, s.rewards);
-  coinsEarned.inc({ username: acc.username }, s.coins);
-  fruitsEarned.inc({ username: acc.username }, s.fruits);
+  uptimeSeconds.inc({ username: acc.username }, s.uptime);
   downtimeSeconds.inc({ username: acc.username }, s.downtime);
 }
 
@@ -152,7 +150,6 @@ async function createBot(account) {
   let state = 'hub';
   let afkGuiWatchdog = null;
   let coinTimer = null;
-  let fruitTimer = null;
 
   function setState(newState) {
     blog.info({ event: 'state_change', from: state, to: newState }, `State: ${state} → ${newState}`);
@@ -246,14 +243,9 @@ async function createBot(account) {
       resetAfkGuiWatchdog();
 
       coinTimer = setInterval(() => {
-        coinsEarned.inc({ username: account.username }, 100);
-        persistedStats[account.username].coins += 100;
-      }, 5 * 60 * 1000);
-
-      fruitTimer = setInterval(() => {
-        fruitsEarned.inc({ username: account.username }, 1);
-        persistedStats[account.username].fruits += 1;
-      }, 6 * 60 * 60 * 1000);
+        uptimeSeconds.inc({ username: account.username }, 60);
+        persistedStats[account.username].uptime += 60;
+      }, 60 * 1000);
     });
   }
 
@@ -297,7 +289,6 @@ async function createBot(account) {
     clearTimeout(watchdog);
     clearTimeout(afkGuiWatchdog);
     clearInterval(coinTimer);
-    clearInterval(fruitTimer);
     botOnline.set({ username: account.username }, 0);
     disconnectTimes.set(account.username, Date.now());
     activeBots.delete(account.username);
@@ -370,7 +361,13 @@ applyPausedList(readPausedFile());
   }
 })();
 
-fs.watch(path.dirname(PAUSED_FILE), (eventType, filename) => {
-  if (filename !== 'paused.json') return;
-  applyPausedList(readPausedFile());
-});
+let lastPausedRaw = JSON.stringify(readPausedFile());
+setInterval(() => {
+  const current = readPausedFile();
+  const raw = JSON.stringify(current);
+  if (raw !== lastPausedRaw) {
+    lastPausedRaw = raw;
+    log.info({ event: 'paused_file_changed', list: current }, 'paused.json changed — applying');
+    applyPausedList(current);
+  }
+}, 3000);
